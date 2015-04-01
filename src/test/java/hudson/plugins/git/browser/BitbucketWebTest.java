@@ -4,6 +4,7 @@
 
 package hudson.plugins.git.browser;
 
+import hudson.model.Run;
 import hudson.plugins.git.GitChangeLogParser;
 import hudson.plugins.git.GitChangeSet;
 import hudson.plugins.git.GitChangeSet.Path;
@@ -28,21 +29,13 @@ public class BitbucketWebTest extends TestCase {
      *
      */
     private static final String BITBUCKET_URL = "http://bitbucket.org/USER/REPO";
-    private final BitbucketWeb bitbucketWeb;
-
-    {
-        try {
-            bitbucketWeb = new BitbucketWeb(BITBUCKET_URL);
-        } catch (MalformedURLException e) {
-            throw new RuntimeException(e);
-        }
-    }
+    private final BitbucketWeb bitbucketWeb = new BitbucketWeb(BITBUCKET_URL);
 
     /**
      * Test method for {@link BitbucketWeb#getUrl()}.
      * @throws java.net.MalformedURLException
      */
-    public void testGetUrl() throws MalformedURLException {
+    public void testGetUrl() throws IOException {
         assertEquals(String.valueOf(bitbucketWeb.getUrl()), BITBUCKET_URL + "/");
     }
 
@@ -50,7 +43,7 @@ public class BitbucketWebTest extends TestCase {
      * Test method for {@link BitbucketWeb#getUrl()}.
      * @throws java.net.MalformedURLException
      */
-    public void testGetUrlForRepoWithTrailingSlash() throws MalformedURLException {
+    public void testGetUrlForRepoWithTrailingSlash() throws IOException {
         assertEquals(String.valueOf(new BitbucketWeb(BITBUCKET_URL + "/").getUrl()), BITBUCKET_URL + "/");
     }
 
@@ -61,7 +54,7 @@ public class BitbucketWebTest extends TestCase {
      */
     public void testGetChangeSetLinkGitChangeSet() throws IOException, SAXException {
         final URL changeSetLink = bitbucketWeb.getChangeSetLink(createChangeSet("rawchangelog"));
-        assertEquals(BITBUCKET_URL + "/changeset/396fc230a3db05c427737aa5c2eb7856ba72b05d", changeSetLink.toString());
+        assertEquals(BITBUCKET_URL + "/commits/396fc230a3db05c427737aa5c2eb7856ba72b05d", changeSetLink.toString());
     }
 
     /**
@@ -74,11 +67,11 @@ public class BitbucketWebTest extends TestCase {
         final String path1Str = "src/main/java/hudson/plugins/git/browser/GithubWeb.java";
         final Path path1 = pathMap.get(path1Str);
 
-        assertEquals(BITBUCKET_URL + "/changeset/396fc230a3db05c427737aa5c2eb7856ba72b05d#chg-" + path1Str, bitbucketWeb.getDiffLink(path1).toString());
+        assertEquals(BITBUCKET_URL + "/commits/396fc230a3db05c427737aa5c2eb7856ba72b05d#chg-" + path1Str, bitbucketWeb.getDiffLink(path1).toString());
 
         final String path2Str = "src/test/java/hudson/plugins/git/browser/GithubWebTest.java";
         final Path path2 = pathMap.get(path2Str);
-        assertEquals(BITBUCKET_URL + "/changeset/396fc230a3db05c427737aa5c2eb7856ba72b05d#chg-" + path2Str, bitbucketWeb.getDiffLink(path2).toString());
+        assertEquals(BITBUCKET_URL + "/commits/396fc230a3db05c427737aa5c2eb7856ba72b05d#chg-" + path2Str, bitbucketWeb.getDiffLink(path2).toString());
         final String path3Str = "src/test/resources/hudson/plugins/git/browser/rawchangelog-with-deleted-file";
         final Path path3 = pathMap.get(path3Str);
         assertNull("Do not return a diff link for added files.", bitbucketWeb.getDiffLink(path3));
@@ -111,7 +104,7 @@ public class BitbucketWebTest extends TestCase {
     private GitChangeSet createChangeSet(String rawchangelogpath) throws IOException, SAXException {
         final File rawchangelog = new File(BitbucketWebTest.class.getResource(rawchangelogpath).getFile());
         final GitChangeLogParser logParser = new GitChangeLogParser(false);
-        final List<GitChangeSet> changeSetList = logParser.parse(null, rawchangelog).getLogs();
+        final List<GitChangeSet> changeSetList = logParser.parse((Run) null, null, rawchangelog).getLogs();
         return changeSetList.get(0);
     }
 

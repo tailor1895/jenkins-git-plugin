@@ -23,19 +23,14 @@ public class RedmineWeb extends GitRepositoryBrowser {
 
     private static final long serialVersionUID = 1L;
 
-    private final URL url;
-
     @DataBoundConstructor
-    public RedmineWeb(String url) throws MalformedURLException {
-        this.url = normalizeToEndWithSlash(new URL(url));
-    }
-
-    public URL getUrl() {
-        return url;
+    public RedmineWeb(String repoUrl) {
+        super(repoUrl);
     }
 
     @Override
     public URL getChangeSetLink(GitChangeSet changeSet) throws IOException {
+        URL url = getUrl();
         return new URL(url, "diff?rev=" + changeSet.getId().toString());
     }
 
@@ -45,7 +40,7 @@ public class RedmineWeb extends GitRepositoryBrowser {
      * https://SERVER/PATH/projects/PROJECT/repository/revisions/a9182a07750c9a0dfd89a8461adf72ef5ef0885b/diff/pom.xml
      * 
      * Returns a diff link for {@link EditType#DELETE} and {@link EditType#EDIT}, for {@link EditType#ADD} returns an
-     * {@link RedmineWeb#getFileLink(Path)}.
+     * {@link #getFileLink}.
      * 
      * 
      * @param path
@@ -56,6 +51,7 @@ public class RedmineWeb extends GitRepositoryBrowser {
     @Override
     public URL getDiffLink(Path path) throws IOException {
         final GitChangeSet changeSet = path.getChangeSet();
+        URL url = getUrl();
         final URL changeSetLink = new URL(url, "revisions/" + changeSet.getId().toString());
         final URL difflink;
         if (path.getEditType().equals(EditType.ADD)) {
@@ -82,6 +78,7 @@ public class RedmineWeb extends GitRepositoryBrowser {
             return getDiffLink(path);
         } else {
             final String spec = "revisions/" + path.getChangeSet().getId() + "/entry/" + path.getPath();
+            URL url = getUrl();
             return new URL(url, url.getPath() + spec);
         }
     }
@@ -94,7 +91,7 @@ public class RedmineWeb extends GitRepositoryBrowser {
 
         @Override
         public RedmineWeb newInstance(StaplerRequest req, JSONObject jsonObject) throws FormException {
-            return req.bindParameters(RedmineWeb.class, "redmineweb.");
+            return req.bindJSON(RedmineWeb.class, jsonObject);
         }
     }
 

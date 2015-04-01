@@ -1,5 +1,6 @@
 package hudson.plugins.git.browser;
 
+import hudson.model.Run;
 import hudson.plugins.git.GitChangeLogParser;
 import hudson.plugins.git.GitChangeSet;
 import hudson.plugins.git.GitChangeSet.Path;
@@ -23,21 +24,14 @@ public class GitoriousWebTest extends TestCase {
      *
      */
     private static final String GITORIOUS_URL = "https://SERVER/PROJECT";
-    private final GitoriousWeb gitoriousWeb;
+    private final GitoriousWeb gitoriousWeb = new GitoriousWeb(GITORIOUS_URL);
 
-    {
-        try {
-            gitoriousWeb = new GitoriousWeb(GITORIOUS_URL);
-        } catch (MalformedURLException e) {
-            throw new RuntimeException(e);
-        }
-    }
 
     /**
      * Test method for {@link hudson.plugins.git.browser.GitoriousWeb#getUrl()}.
      * @throws MalformedURLException
      */
-    public void testGetUrl() throws MalformedURLException {
+    public void testGetUrl() throws IOException {
         assertEquals(String.valueOf(gitoriousWeb.getUrl()), GITORIOUS_URL  + "/");
     }
 
@@ -45,7 +39,7 @@ public class GitoriousWebTest extends TestCase {
      * Test method for {@link hudson.plugins.git.browser.GitoriousWeb#getUrl()}.
      * @throws MalformedURLException
      */
-    public void testGetUrlForRepoWithTrailingSlash() throws MalformedURLException {
+    public void testGetUrlForRepoWithTrailingSlash() throws IOException {
         assertEquals(String.valueOf(new GitoriousWeb(GITORIOUS_URL + "/").getUrl()), GITORIOUS_URL  + "/");
     }
 
@@ -100,7 +94,7 @@ public class GitoriousWebTest extends TestCase {
     private GitChangeSet createChangeSet(String rawchangelogpath) throws IOException, SAXException {
         final File rawchangelog = new File(GitoriousWebTest.class.getResource(rawchangelogpath).getFile());
         final GitChangeLogParser logParser = new GitChangeLogParser(false);
-        final List<GitChangeSet> changeSetList = logParser.parse(null, rawchangelog).getLogs();
+        final List<GitChangeSet> changeSetList = logParser.parse((Run) null, null, rawchangelog).getLogs();
         return changeSetList.get(0);
     }
 

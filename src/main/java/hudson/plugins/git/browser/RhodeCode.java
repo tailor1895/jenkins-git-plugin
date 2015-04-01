@@ -21,24 +21,19 @@ import java.net.URL;
 public class RhodeCode extends GitRepositoryBrowser {
 
     private static final long serialVersionUID = 1L;
-    private final URL url;
 
     @DataBoundConstructor
-    public RhodeCode(String url) throws MalformedURLException {
-        this.url = normalizeToEndWithSlash(new URL(url));
+    public RhodeCode(String repoUrl) {
+        super(repoUrl);
     }
 
-    public URL getUrl() {
-        return url;
-    }
-
-    private QueryBuilder param() {
+    private QueryBuilder param(URL url) {
         return new QueryBuilder(url.getQuery());
     }
 
     /**
      * Creates a link to the change set
-     * http://[RhodeCode URL]/files/[commit]
+     * http://[RhodeCode URL]/changeset/[commit]
      *
      * @param changeSet commit hash
      * @return change set link
@@ -46,7 +41,8 @@ public class RhodeCode extends GitRepositoryBrowser {
      */
     @Override
     public URL getChangeSetLink(GitChangeSet changeSet) throws IOException {
-        return new URL(url, url.getPath() + "files/" + changeSet.getId() + "/");
+        URL url = getUrl();
+        return new URL(url, url.getPath() + "changeset/" + changeSet.getId());
     }
 
     /**
@@ -60,11 +56,12 @@ public class RhodeCode extends GitRepositoryBrowser {
     @Override
     public URL getDiffLink(Path path) throws IOException {
         GitChangeSet changeSet = path.getChangeSet();
+        URL url = getUrl();
 
         if (path.getEditType() == EditType.DELETE) {
-	    return new URL(url, url.getPath() + "diff/" + path.getPath() + param().add("diff2=" + changeSet.getParentCommit()).add("diff1=" + changeSet.getId()).toString() + "&diff=diff+to+revision");
+	        return new URL(url, url.getPath() + "diff/" + path.getPath() + param(url).add("diff2=" + changeSet.getParentCommit()).add("diff1=" + changeSet.getId()).toString() + "&diff=diff+to+revision");
         } else {
-            return new URL(url, url.getPath() + "diff/" + path.getPath() + param().add("diff2=" + changeSet.getId()).add("diff1=" + changeSet.getId()).toString()  + "&diff=diff+to+revision");
+            return new URL(url, url.getPath() + "diff/" + path.getPath() + param(url).add("diff2=" + changeSet.getId()).add("diff1=" + changeSet.getId()).toString()  + "&diff=diff+to+revision");
         }
     }
 
@@ -79,6 +76,7 @@ public class RhodeCode extends GitRepositoryBrowser {
     @Override
     public URL getFileLink(Path path) throws IOException {
         GitChangeSet changeSet = path.getChangeSet();
+        URL url = getUrl();
 
         if (path.getEditType() == EditType.DELETE) {
             return new URL(url, url.getPath() + "files/" + changeSet.getParentCommit().toString() + '/' + path.getPath());
@@ -95,7 +93,7 @@ public class RhodeCode extends GitRepositoryBrowser {
 
         @Override
         public RhodeCode newInstance(StaplerRequest req, JSONObject jsonObject) throws FormException {
-            return req.bindParameters(RhodeCode.class, "rhodecode.");
+            return req.bindJSON(RhodeCode.class, jsonObject);
         }
     }
 }

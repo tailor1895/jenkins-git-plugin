@@ -1,15 +1,59 @@
 package hudson.plugins.git.browser;
 
+import hudson.EnvVars;
+import hudson.model.Job;
+import hudson.model.TaskListener;
 import hudson.plugins.git.GitChangeSet;
 import hudson.scm.RepositoryBrowser;
+import org.kohsuke.stapler.Stapler;
+import org.kohsuke.stapler.StaplerRequest;
 
 import java.io.IOException;
 import java.net.URL;
 
 public abstract class GitRepositoryBrowser extends RepositoryBrowser<GitChangeSet> {
+
+    private /* mostly final */ String url;
+
+    @Deprecated
+    protected GitRepositoryBrowser() {
+    }
+
+    protected GitRepositoryBrowser(String repourl) {
+        this.url = repourl;
+    }
+
+    public final String getRepoUrl() {
+        return url;
+    }
+
+    public final URL getUrl() throws IOException {
+        String u = url;
+        StaplerRequest req = Stapler.getCurrentRequest();
+        if (req != null) {
+            Job job = req.findAncestorObject(Job.class);
+            if (job != null) {
+                EnvVars env = null;
+                try {
+                    env = job.getEnvironment(null, TaskListener.NULL);
+                } catch (InterruptedException e) {
+                    throw new IOException("Failed to retrieve job environment", e);
+                }
+                u = env.expand(url);
+            }
+        }
+
+        if (getNormalizeUrl()) {
+            return normalizeToEndWithSlash(new URL(u));
+        }
+        else {
+            return new URL(u);
+        }
+    }
+
     /**
      * Determines the link to the diff between the version
-     * in the specified revision of {@link GitChangeSet.Path} to its previous version.
+     * in the specified revision of {@link hudson.plugins.git.GitChangeSet.Path} to its previous version.
      *
      * @param path affected file path
      * @return
@@ -28,6 +72,16 @@ public abstract class GitRepositoryBrowser extends RepositoryBrowser<GitChangeSe
      * @throws IOException
      */
     public abstract URL getFileLink(GitChangeSet.Path path) throws IOException;
-    
+
+    /**
+     * Determines whether a URL should be normalized
+	 * Overridden in the rare case where it shouldn't
+     *
+     * @return True if the URL should be normalized
+     */
+    protected boolean getNormalizeUrl() {
+		return true;
+	}
+
     private static final long serialVersionUID = 1L;
 }

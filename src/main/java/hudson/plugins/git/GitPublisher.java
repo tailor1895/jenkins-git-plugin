@@ -1,33 +1,40 @@
 package hudson.plugins.git;
 
-import hudson.*;
-import hudson.FilePath.FileCallable;
+import hudson.AbortException;
+import hudson.EnvVars;
+import hudson.Extension;
+import hudson.FilePath;
+import hudson.Launcher;
+import hudson.Util;
 import hudson.matrix.MatrixAggregatable;
 import hudson.matrix.MatrixAggregator;
 import hudson.matrix.MatrixBuild;
 import hudson.matrix.MatrixRun;
-import hudson.model.*;
+import hudson.model.AbstractBuild;
+import hudson.model.AbstractDescribableImpl;
+import hudson.model.AbstractProject;
+import hudson.model.BuildListener;
+import hudson.model.Descriptor;
+import hudson.model.Descriptor.FormException;
+import hudson.model.Result;
 import hudson.plugins.git.opt.PreBuildMergeOptions;
-import hudson.remoting.VirtualChannel;
 import hudson.scm.SCM;
 import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.BuildStepMonitor;
 import hudson.tasks.Publisher;
 import hudson.tasks.Recorder;
 import hudson.util.FormValidation;
-import jenkins.model.Jenkins;
 import org.apache.commons.lang.StringUtils;
 import org.eclipse.jgit.transport.RemoteConfig;
-import org.jenkinsci.plugins.gitclient.CliGitAPIImpl;
-import org.jenkinsci.plugins.gitclient.Git;
+import org.eclipse.jgit.transport.URIish;
 import org.jenkinsci.plugins.gitclient.GitClient;
+import org.jenkinsci.plugins.gitclient.PushCommand;
 import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
 
 import javax.servlet.ServletException;
-import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -44,6 +51,7 @@ public class GitPublisher extends Recorder implements Serializable, MatrixAggreg
 
     private boolean pushMerge;
     private boolean pushOnlyIfSuccess;
+    private boolean forcePush;
     
     private List<TagToPush> tagsToPush;
     // Pushes HEAD to these locations
@@ -56,12 +64,14 @@ public class GitPublisher extends Recorder implements Serializable, MatrixAggreg
                         List<BranchToPush> branchesToPush,
                         List<NoteToPush> notesToPush,
                         boolean pushOnlyIfSuccess,
-                        boolean pushMerge) {
+                        boolean pushMerge,
+                        boolean forcePush) {
         this.tagsToPush = tagsToPush;
         this.branchesToPush = branchesToPush;
         this.notesToPush = notesToPush;
         this.pushMerge = pushMerge;
         this.pushOnlyIfSuccess = pushOnlyIfSuccess;
+        this.forcePush = forcePush;
         this.configVersion = 2L;
     }
 
@@ -71,6 +81,10 @@ public class GitPublisher extends Recorder implements Serializable, MatrixAggreg
     
     public boolean isPushMerge() {
         return pushMerge;
+    }
+
+    public boolean isForcePush() {
+        return forcePush;
     }
 
     public boolean isPushTags() {
@@ -160,7 +174,7 @@ public class GitPublisher extends Recorder implements Serializable, MatrixAggreg
     @Override
     public boolean perform(AbstractBuild<?, ?> build,
                            Launcher launcher, final BuildListener listener)
-        throws InterruptedException {
+            throws InterruptedException, IOException {
 
         // during matrix build, the push back would happen at the very end only once for the whole matrix,
         // not for individual configuration build.
@@ -183,7 +197,6 @@ public class GitPublisher extends Recorder implements Serializable, MatrixAggreg
     	}
         
         final String projectName = build.getProject().getName();
-        final FilePath workspacePath = build.getWorkspace();
         final int buildNumber = build.getNumber();
         final Result buildResult = build.getResult();
 
@@ -193,225 +206,153 @@ public class GitPublisher extends Recorder implements Serializable, MatrixAggreg
             return true;
         }
         else {
-            final String gitExe = gitSCM.getGitExe(build.getBuiltOn(), listener);
-            EnvVars tempEnvironment;
-            try {
-                tempEnvironment = build.getEnvironment(listener);
-            } catch (IOException e) {
-                e.printStackTrace(listener.error("Failed to build up environment"));
-                tempEnvironment = new EnvVars();
-            }
+            EnvVars environment = build.getEnvironment(listener);
 
-            String confName = gitSCM.getGitConfigNameToUse();
-            if ((confName != null) && (!confName.equals(""))) {
-                tempEnvironment.put("GIT_COMMITTER_NAME", confName);
-                tempEnvironment.put("GIT_AUTHOR_NAME", confName);
-            }
-            String confEmail = gitSCM.getGitConfigEmailToUse();
-            if ((confEmail != null) && (!confEmail.equals(""))) {
-                tempEnvironment.put("GIT_COMMITTER_EMAIL", confEmail);
-                tempEnvironment.put("GIT_AUTHOR_EMAIL", confEmail);
-            }
-            
-            final EnvVars environment = tempEnvironment;
-            final FilePath workingDirectory = gitSCM.workingDirectory(workspacePath,environment);
-            
-            boolean pushResult = true;
+            final GitClient git  = gitSCM.createClient(listener, environment, build, build.getWorkspace());
+
+            URIish remoteURI;
+
             // If we're pushing the merge back...
             if (pushMerge) {
-                boolean mergeResult;
                 try {
-                    mergeResult = workingDirectory.act(new FileCallable<Boolean>() {
-                            private static final long serialVersionUID = 1L;
-                            
-                            public Boolean invoke(File workspace,
-                                                  VirtualChannel channel) throws IOException {
+                    if (!gitSCM.getSkipTag()) {
+                        // We delete the old tag generated by the SCM plugin
+                        String buildnumber = "jenkins-" + projectName.replace(" ", "_") + "-" + buildNumber;
+                        if (git.tagExists(buildnumber))
+                            git.deleteTag(buildnumber);
 
-                                GitClient git = Git.with(listener, environment)
-                                        .in(workspace)
-                                        .using(gitExe)
-                                        .getClient();
+                        // And add the success / fail state into the tag.
+                        buildnumber += "-" + buildResult.toString();
 
-                                // We delete the old tag generated by the SCM plugin
-                                String buildnumber = "jenkins-" + projectName.replace(" ", "_") + "-" + buildNumber;
-                                git.deleteTag(buildnumber);
-                                
-                                // And add the success / fail state into the tag.
-                                buildnumber += "-" + buildResult.toString();
-                                
-                                git.tag(buildnumber, "Jenkins Build #" + buildNumber);
-                                
-                                PreBuildMergeOptions mergeOptions = gitSCM.getMergeOptions();
-                                
-                                if (mergeOptions.doMerge() && buildResult.isBetterOrEqualTo(Result.SUCCESS)) {
-                                    RemoteConfig remote = mergeOptions.getMergeRemote();
-                                    listener.getLogger().println("Pushing HEAD to branch " + mergeOptions.getMergeTarget() + " of " + remote.getName() + " repository");
+                        git.tag(buildnumber, "Jenkins Build #" + buildNumber);
+                    }
 
-                                    git.push(remote.getName(), "HEAD:" + mergeOptions.getMergeTarget());
-                                } else {
-                                    //listener.getLogger().println("Pushing result " + buildnumber + " to origin repository");
-                                    //git.push(null);
-                                }
-                                
-                                return true;
-                            }
-                        });
-                } catch (Throwable e) {
+                    PreBuildMergeOptions mergeOptions = gitSCM.getMergeOptions();
+
+                    String mergeTarget = environment.expand(mergeOptions.getMergeTarget());
+
+                    if (mergeOptions.doMerge() && buildResult.isBetterOrEqualTo(Result.SUCCESS)) {
+                        RemoteConfig remote = mergeOptions.getMergeRemote();
+
+                        // expand environment variables in remote repository
+                        remote = gitSCM.getParamExpandedRepo(environment, remote);
+
+                        listener.getLogger().println("Pushing HEAD to branch " + mergeTarget + " of " + remote.getName() + " repository");
+
+                        remoteURI = remote.getURIs().get(0);
+                        PushCommand push = git.push().to(remoteURI).ref("HEAD:" + mergeTarget);
+                        if (forcePush) {
+                          push.force();
+                        }
+                        push.execute();
+                    } else {
+                        //listener.getLogger().println("Pushing result " + buildnumber + " to origin repository");
+                        //git.push(null);
+                    }
+                } catch (FormException e) {
                     e.printStackTrace(listener.error("Failed to push merge to origin repository"));
-                    build.setResult(Result.FAILURE);
-                    mergeResult = false;
-                    
-                }
-                
-                if (!mergeResult) {
-                    pushResult = false;
+                    return false;
+                } catch (GitException e) {
+                    e.printStackTrace(listener.error("Failed to push merge to origin repository"));
+                    return false;
                 }
             }
+
             if (isPushTags()) {
-                boolean allTagsResult = true;
                 for (final TagToPush t : tagsToPush) {
-                    boolean tagResult = true;
-                    if (t.getTagName() == null) {
-                        listener.getLogger().println("No tag to push defined");
-                        tagResult = false;
-                    }
-                    if (t.getTargetRepoName() == null) {
-                        listener.getLogger().println("No target repo to push to defined");
-                        tagResult = false;
-                    }
-                    if (tagResult) {
-                        final String tagName = environment.expand(t.getTagName());
-                        final String tagMessage = hudson.Util.fixNull(environment.expand(t.getTagMessage()));
-                        final String targetRepo = environment.expand(t.getTargetRepoName());
-                        
-                        try {
-                            tagResult = workingDirectory.act(new FileCallable<Boolean>() {
-                                    private static final long serialVersionUID = 1L;
-                                    
-                                    public Boolean invoke(File workspace,
-                                                          VirtualChannel channel) throws IOException {
+                    if (t.getTagName() == null)
+                        throw new AbortException("No tag to push defined");
 
-                                        GitClient git = Git.with(listener, environment)
-                                                .in(workspace)
-                                                .using(gitExe)
-                                                .getClient();
-                                        
-                                        RemoteConfig remote = gitSCM.getRepositoryByName(targetRepo);
-                                        
-                                        if (remote == null) {
-                                            listener.getLogger().println("No repository found for target repo name " + targetRepo);
-                                            return false;
-                                        }
+                    if (t.getTargetRepoName() == null)
+                        throw new AbortException("No target repo to push to defined");
 
-                                        boolean tagExists = git.tagExists(tagName.replace(' ', '_'));
-                                        if (t.isCreateTag() || t.isUpdateTag()) {
-                                            if (tagExists && !t.isUpdateTag()) {
-                                                listener.getLogger().println("Tag " + tagName + " already exists and Create Tag is specified, so failing.");
-                                                return false;
-                                            }
+                    final String tagName = environment.expand(t.getTagName());
+                    final String tagMessage = hudson.Util.fixNull(environment.expand(t.getTagMessage()));
+                    final String targetRepo = environment.expand(t.getTargetRepoName());
 
-                                            if (tagMessage.isEmpty()) {
-                                                git.tag(tagName, "Jenkins Git plugin tagging with " + tagName);
-                                            } else {
-                                                git.tag(tagName, tagMessage);
-                                            }
-                                        }
-                                        else if (!tagExists) {
-                                            listener.getLogger().println("Tag " + tagName + " does not exist and Create Tag is not specified, so failing.");
-                                            return false;
-                                        }
+                    try {
+                    	// Lookup repository with unexpanded name as GitSCM stores them unexpanded
+                        RemoteConfig remote = gitSCM.getRepositoryByName(t.getTargetRepoName());
 
-                                        listener.getLogger().println("Pushing tag " + tagName + " to repo "
-                                                                     + targetRepo);
-                                        git.push(remote.getName(), tagName);
-                                        
-                                        return true;
-                                    }
-                                });
-                        } catch (Throwable e) {
-                            e.printStackTrace(listener.error("Failed to push tag " + tagName + " to " + targetRepo));
-                            build.setResult(Result.FAILURE);
-                            tagResult = false;
+                        if (remote == null)
+                            throw new AbortException("No repository found for target repo name " + targetRepo);
+
+                        // expand environment variables in remote repository
+                        remote = gitSCM.getParamExpandedRepo(environment, remote);
+
+                        boolean tagExists = git.tagExists(tagName.replace(' ', '_'));
+                        if (t.isCreateTag() || t.isUpdateTag()) {
+                            if (tagExists && !t.isUpdateTag()) {
+                                throw new AbortException("Tag " + tagName + " already exists and Create Tag is specified, so failing.");
+                            }
+
+                            if (tagMessage.length()==0) {
+                                git.tag(tagName, "Jenkins Git plugin tagging with " + tagName);
+                            } else {
+                                git.tag(tagName, tagMessage);
+                            }
                         }
+                        else if (!tagExists) {
+                            throw new AbortException("Tag " + tagName + " does not exist and Create Tag is not specified, so failing.");
+                        }
+
+                        listener.getLogger().println("Pushing tag " + tagName + " to repo "
+                                                     + targetRepo);
+
+                        remoteURI = remote.getURIs().get(0);
+                        PushCommand push = git.push().to(remoteURI).ref(tagName);
+                        if (forcePush) {
+                          push.force();
+                        }
+                        push.execute();
+                    } catch (GitException e) {
+                        e.printStackTrace(listener.error("Failed to push tag " + tagName + " to " + targetRepo));
+                        return false;
                     }
-                    
-                    if (!tagResult) {
-                        allTagsResult = false;
-                    }
-                }
-                if (!allTagsResult) {
-                    pushResult = false;
                 }
             }
             
             if (isPushBranches()) {
-                boolean allBranchesResult = true;
                 for (final BranchToPush b : branchesToPush) {
-                    boolean branchResult = true;
-                    if (b.getBranchName() == null) {
-                        listener.getLogger().println("No branch to push defined");
-                        return false;
-                    }
-                    if (b.getTargetRepoName() == null) {
-                        listener.getLogger().println("No branch repo to push to defined");
-                        return false;
-                    }
+                    if (b.getBranchName() == null)
+                        throw new AbortException("No branch to push defined");
+
+                    if (b.getTargetRepoName() == null)
+                        throw new AbortException("No branch repo to push to defined");
+
                     final String branchName = environment.expand(b.getBranchName());
                     final String targetRepo = environment.expand(b.getTargetRepoName());
                     
-                    if (branchResult) {
-                        try {
-                            branchResult = workingDirectory.act(new FileCallable<Boolean>() {
-                                    private static final long serialVersionUID = 1L;
-                                    
-                                    public Boolean invoke(File workspace,
-                                                          VirtualChannel channel) throws IOException {
+                    try {
+                    	// Lookup repository with unexpanded name as GitSCM stores them unexpanded
+                        RemoteConfig remote = gitSCM.getRepositoryByName(b.getTargetRepoName());
 
-                                        GitClient git = Git.with(listener, environment)
-                                                .in(workspace)
-                                                .using(gitExe)
-                                                .getClient();
-                                        
-                                        RemoteConfig remote = gitSCM.getRepositoryByName(targetRepo);
-                                        
-                                        if (remote == null) {
-                                            listener.getLogger().println("No repository found for target repo name " + targetRepo);
-                                            return false;
-                                        }
-                                        
-                                        listener.getLogger().println("Pushing HEAD to branch " + branchName + " at repo "
-                                                                     + targetRepo);
-                                        git.push(remote.getName(), "HEAD:" + branchName);
-                                        
-                                        return true;
-                                    }
-                                });
-                        } catch (Throwable e) {
-                            e.printStackTrace(listener.error("Failed to push branch " + branchName + " to " + targetRepo));
-                            build.setResult(Result.FAILURE);
-                            branchResult = false;
+                        if (remote == null)
+                            throw new AbortException("No repository found for target repo name " + targetRepo);
+
+                        // expand environment variables in remote repository
+                        remote = gitSCM.getParamExpandedRepo(environment, remote);
+
+                        listener.getLogger().println("Pushing HEAD to branch " + branchName + " at repo "
+                                                     + targetRepo);
+                        remoteURI = remote.getURIs().get(0);
+                        PushCommand push = git.push().to(remoteURI).ref("HEAD:" + branchName);
+                        if (forcePush) {
+                          push.force();
                         }
-                    }
-                    
-                    if (!branchResult) {
-                        allBranchesResult = false;
+                        push.execute();
+                    } catch (GitException e) {
+                        e.printStackTrace(listener.error("Failed to push branch " + branchName + " to " + targetRepo));
+                        return false;
                     }
                 }
-                if (!allBranchesResult) {
-                    pushResult = false;
-                }
-                
             }
                      
             if (isPushNotes()) {
-                boolean allNotesResult = true;
                 for (final NoteToPush b : notesToPush) {
-                    boolean noteResult = true;
-                    if (b.getnoteMsg() == null) {
-                        listener.getLogger().println("No note to push defined");
-                        return false;
-                    }
-                    
+                    if (b.getnoteMsg() == null)
+                        throw new AbortException("No note to push defined");
+
                     b.setEmptyTargetRepoToOrigin();
                     String noteMsgTmp = environment.expand(b.getnoteMsg());
                     final String noteMsg = replaceAdditionalEnvironmentalVariables(noteMsgTmp, build);
@@ -419,57 +360,39 @@ public class GitPublisher extends Recorder implements Serializable, MatrixAggreg
                     final String targetRepo = environment.expand(b.getTargetRepoName());
                     final boolean noteReplace = b.getnoteReplace();
                     
-                    if (noteResult) {
-                        try {
-                            noteResult = workingDirectory.act(new FileCallable<Boolean>() {
-                                    private static final long serialVersionUID = 1L;
-   
-                                    
-                                    public Boolean invoke(File workspace,
-                                                          VirtualChannel channel) throws IOException {
+                    try {
+                    	// Lookup repository with unexpanded name as GitSCM stores them unexpanded
+                        RemoteConfig remote = gitSCM.getRepositoryByName(b.getTargetRepoName());
 
-                                        GitClient git = Git.with(listener, environment)
-                                                .in(workspace)
-                                                .using(gitExe)
-                                                .getClient();
-
-                                        RemoteConfig remote = gitSCM.getRepositoryByName(targetRepo);
-
-                                        if (remote == null) {
-                                            listener.getLogger().println("No repository found for target repo name " + targetRepo);
-                                            return false;
-                                        }
-                                        
-                                        listener.getLogger().println("Adding note to namespace \""+noteNamespace +"\":\n" + noteMsg + "\n******" );
-
-                                        if ( noteReplace )
-                                        	git.addNote(    noteMsg, noteNamespace );
-                                        else
-                                        	git.appendNote( noteMsg, noteNamespace );
-
-                                        git.push(remote.getName(), "refs/notes/*" );
-                                        
-                                        return true;
-                                    }
-                                });
-                        } catch (Throwable e) {
-                            e.printStackTrace(listener.error("Failed to add note: \n" + noteMsg  + "\n******"));
-                            build.setResult(Result.FAILURE);
-                            noteResult = false;
+                        if (remote == null) {
+                            listener.getLogger().println("No repository found for target repo name " + targetRepo);
+                            return false;
                         }
-                    }
-                    
-                    if (!noteResult) {
-                        allNotesResult = false;
+
+                        // expand environment variables in remote repository
+                        remote = gitSCM.getParamExpandedRepo(environment, remote);
+
+                        listener.getLogger().println("Adding note to namespace \""+noteNamespace +"\":\n" + noteMsg + "\n******" );
+
+                        if ( noteReplace )
+                            git.addNote(    noteMsg, noteNamespace );
+                        else
+                            git.appendNote( noteMsg, noteNamespace );
+
+                        remoteURI = remote.getURIs().get(0);
+                        PushCommand push = git.push().to(remoteURI).ref("refs/notes/*");
+                        if (forcePush) {
+                          push.force();
+                        }
+                        push.execute();
+                    } catch (GitException e) {
+                        e.printStackTrace(listener.error("Failed to add note: \n" + noteMsg  + "\n******"));
+                        return false;
                     }
                 }
-                if (!allNotesResult) {
-                    pushResult = false;
-                }
-                
             }
             
-            return pushResult;
+            return true;
         }
     }
 
@@ -542,6 +465,10 @@ public class GitPublisher extends Recorder implements Serializable, MatrixAggreg
             if (validation.kind != FormValidation.Kind.OK)
                 return validation;
 
+            if (!(project.getScm() instanceof GitSCM)) {
+                return FormValidation.warning("Project not currently configured to use Git; cannot check remote repository");
+            }
+
             GitSCM scm = (GitSCM) project.getScm();
             if (scm.getRepositoryByName(remote) == null)
                 return FormValidation
@@ -578,12 +505,12 @@ public class GitPublisher extends Recorder implements Serializable, MatrixAggreg
             return targetRepoName;
         }
 
-        public void setTargetRepoName() {
+        public void setTargetRepoName(String targetRepoName) {
             this.targetRepoName = targetRepoName;
         }
         
         public void setEmptyTargetRepoToOrigin(){
-            if (targetRepoName == null || targetRepoName.trim().isEmpty() ){
+            if (targetRepoName == null || targetRepoName.trim().length()==0){
             	targetRepoName = "origin";
             }
         }
@@ -676,7 +603,7 @@ public class GitPublisher extends Recorder implements Serializable, MatrixAggreg
             this.noteMsg = Util.fixEmptyAndTrim(noteMsg);
             this.noteReplace = noteReplace;
             
-            if ( noteNamespace != null && !noteNamespace.trim().isEmpty() )
+            if ( noteNamespace != null && noteNamespace.trim().length()!=0)
     			this.noteNamespace = Util.fixEmptyAndTrim(noteNamespace);
     		else
     			this.noteNamespace = "master";

@@ -8,19 +8,20 @@ import hudson.scm.ChangeLogAnnotator;
 import hudson.scm.ChangeLogSet;
 import hudson.scm.ChangeLogSet.AffectedFile;
 import hudson.scm.EditType;
-import hudson.tasks.Mailer;
-import hudson.tasks.Mailer.UserProperty;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang.math.NumberUtils;
+import org.apache.commons.lang.time.FastDateFormat;
 import org.kohsuke.stapler.export.Exported;
 import org.kohsuke.stapler.export.ExportedBean;
 
 import java.io.IOException;
 import java.text.DateFormat;
+import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
+import java.util.TimeZone;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -34,10 +35,7 @@ public class GitChangeSet extends ChangeLogSet.Entry {
 
     private static final String PREFIX_AUTHOR = "author ";
     private static final String PREFIX_COMMITTER = "committer ";
-    private static final String IDENTITY = "(.*)<(.*)> (.*) (.*)";
-    private static final String PREFIX_BRANCH = "Changes in branch ";
-    private static final String BRANCH_PATTERN = "([-_a-zA-Z0-9/]*),";
-    
+    private static final String IDENTITY = "([^<]*)<(.*)> (.*)";
 
     private static final Pattern FILE_LOG_ENTRY = Pattern.compile("^:[0-9]{6} [0-9]{6} ([0-9a-f]{40}) ([0-9a-f]{40}) ([ACDMRTUX])(?>[0-9]+)?\t(.*)$");
     private static final Pattern AUTHOR_ENTRY = Pattern.compile("^"
@@ -45,19 +43,36 @@ public class GitChangeSet extends ChangeLogSet.Entry {
     private static final Pattern COMMITTER_ENTRY = Pattern.compile("^"
             + PREFIX_COMMITTER + IDENTITY + "$");
     private static final Pattern RENAME_SPLIT = Pattern.compile("^(.*?)\t(.*)$");
-    private static final Pattern BRANCH_ENTRY = Pattern.compile("^"
-            + PREFIX_BRANCH + BRANCH_PATTERN + " .*$");
-    
+
     private static final String NULL_HASH = "0000000000000000000000000000000000000000";
-    private String branch;
+    private static final String ISO_8601 = "yyyy-MM-dd'T'HH:mm:ss";
+    private static final String ISO_8601_WITH_TZ = "yyyy-MM-dd'T'HH:mm:ssX";
+
+    /**
+     * This is broken as a part of the 1.5 refactoring.
+     *
+     * <p>
+     * When we build a commit that multiple branches point to, Git plugin historically recorded
+     * changelogs "revOfBranchInPreviousBuild...revToBuild" for each branch separately. This
+     * however fails to take full generality of Git commit graph into account, as such rev-lists
+     * can share common commits, which then get reported multiple times.
+     *
+     * <p>
+     * In Git, a commit doesn't belong to a branch, in the sense that you cannot look at the object graph
+     * and re-construct exactly how branch has evolved. In that sense, trying to attribute commits to
+     * branches is a somewhat futile exercise.
+     *
+     * <p>
+     * On the other hand, if this is still deemed important, the right thing to do is to traverse
+     * the commit graph and see if a commit can be only reachable from the "revOfBranchInPreviousBuild" of
+     * just one branch, in which case it's safe to attribute the commit to that branch.
+     */
     private String committer;
     private String committerEmail;
     private String committerTime;
-    private String committerTz;
     private String author;
     private String authorEmail;
     private String authorTime;
-    private String authorTz;
     private String comment;
     private String title;
     private String id;
@@ -90,28 +105,20 @@ public class GitChangeSet extends ChangeLogSet.Entry {
             } else if (line.startsWith("tree ")) {
             } else if (line.startsWith("parent ")) {
                 this.parentCommit = line.split(" ")[1];
-            } else if (line.startsWith(PREFIX_BRANCH)) {
-                Matcher branchMatcher = BRANCH_ENTRY.matcher(line);
-                if (branchMatcher.matches()
-                        && branchMatcher.groupCount() >= 1) {
-                    this.branch = branchMatcher.group(1).trim();
-                }
             } else if (line.startsWith(PREFIX_COMMITTER)) {
                 Matcher committerMatcher = COMMITTER_ENTRY.matcher(line);
                 if (committerMatcher.matches()
-                        && committerMatcher.groupCount() >= 4) {
+                        && committerMatcher.groupCount() >= 3) {
                     this.committer = committerMatcher.group(1).trim();
                     this.committerEmail = committerMatcher.group(2);
-                    this.committerTime = committerMatcher.group(3);
-                    this.committerTz = committerMatcher.group(4);
+                    this.committerTime = isoDateFormat(committerMatcher.group(3));
                 }
             } else if (line.startsWith(PREFIX_AUTHOR)) {
                 Matcher authorMatcher = AUTHOR_ENTRY.matcher(line);
-                if (authorMatcher.matches() && authorMatcher.groupCount() >= 4) {
+                if (authorMatcher.matches() && authorMatcher.groupCount() >= 3) {
                     this.author = authorMatcher.group(1).trim();
                     this.authorEmail = authorMatcher.group(2);
-                    this.authorTime = authorMatcher.group(3);
-                    this.authorTz = authorMatcher.group(4);
+                    this.authorTime = isoDateFormat(authorMatcher.group(3));
                 }
             } else if (line.startsWith("    ")) {
                 message.append(line.substring(4)).append('\n');
@@ -166,42 +173,43 @@ public class GitChangeSet extends ChangeLogSet.Entry {
         }
     }
 
+    /** Convert to iso date format if required */
+    private String isoDateFormat(String s) {
+        String date = s;
+        String timezone = "Z";
+        int spaceIndex = s.indexOf(' ');
+        if (spaceIndex > 0) {
+            date = s.substring(0, spaceIndex);
+            timezone = s.substring(spaceIndex+1);
+        }
+        if (NumberUtils.isDigits(date)) {
+            // legacy mode
+            long time = Long.parseLong(date);
+            DateFormat formatter = new SimpleDateFormat(ISO_8601);
+            formatter.setTimeZone(TimeZone.getTimeZone("GMT"));
+            return formatter.format(new Date(time * 1000)) + timezone;
+        } else {
+            // already in ISO format
+            return s;
+        }
+    }
+
     private String parseHash(String hash) {
         return NULL_HASH.equals(hash) ? null : hash;
     }
 
     @Exported
     public String getDate() {
-        DateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-
-        String dateStr;
-        String csTime;
-        String csTz;
-        Date csDate;
-
-        if (authorOrCommitter) {
-            csTime = this.authorTime;
-            csTz = this.authorTz;
-        }
-        else {
-            csTime = this.committerTime;
-            csTz = this.committerTz;
-        }
-
-        try {
-            csDate = new Date(Long.parseLong(csTime) * 1000L);
-        } catch (NumberFormatException e) {
-            csDate = new Date();
-        }
-
-        dateStr = fmt.format(csDate) + " " + csTz;
-
-        return dateStr;
+        return authorOrCommitter ? authorTime : committerTime;
     }
 
     @Override
     public long getTimestamp() {
-        return Long.parseLong(authorOrCommitter ? authorTime : committerTime) * 1000L;
+        try {
+            return new SimpleDateFormat(ISO_8601_WITH_TZ).parse(getDate()).getTime();
+        } catch (ParseException e) {
+            return -1;
+        }
     }
 
     @Override
@@ -253,6 +261,9 @@ public class GitChangeSet extends ChangeLogSet.Entry {
      */
     public User findOrCreateUser(String csAuthor, String csAuthorEmail, boolean createAccountBasedOnEmail) {
         User user;
+        if (csAuthor == null) {
+            return User.getUnknown();
+        }
         if (createAccountBasedOnEmail) {
             user = User.get(csAuthorEmail, false);
 
@@ -260,7 +271,8 @@ public class GitChangeSet extends ChangeLogSet.Entry {
                 try {
                     user = User.get(csAuthorEmail, true);
                     user.setFullName(csAuthor);
-                    user.addProperty(new Mailer.UserProperty(csAuthorEmail));
+                    if (hasHudsonTasksMailer())
+                        setMail(user, csAuthorEmail);
                     user.save();
                 } catch (IOException e) {
                     // add logging statement?
@@ -273,24 +285,41 @@ public class GitChangeSet extends ChangeLogSet.Entry {
                 user = User.get(csAuthorEmail.split("@")[0], true);
         }
         // set email address for user if none is already available
-        if (fixEmpty(csAuthorEmail) != null && !isMailerPropertySet(user)) {
+        if (fixEmpty(csAuthorEmail) != null && hasHudsonTasksMailer() && !hasMail(user)) {
             try {
-                user.addProperty(new Mailer.UserProperty(csAuthorEmail));
+                setMail(user, csAuthorEmail);
             } catch (IOException e) {
-                // ignore error
+                // ignore
             }
         }
         return user;
     }
 
-	private boolean isMailerPropertySet(User user) {
-		UserProperty property = user.getProperty(Mailer.UserProperty.class);
-		return property != null
-            && property.hasExplicitlyConfiguredAddress();
+    private void setMail(User user, String csAuthorEmail) throws IOException {
+        user.addProperty(new hudson.tasks.Mailer.UserProperty(csAuthorEmail));
+    }
+
+    private boolean hasMail(User user) {
+        hudson.tasks.Mailer.UserProperty property = user.getProperty(hudson.tasks.Mailer.UserProperty.class);
+        return property != null && property.hasExplicitlyConfiguredAddress();
 	}
 
-	private boolean isCreateAccountBasedOnEmail() {
-        DescriptorImpl descriptor = (DescriptorImpl) Hudson.getInstance().getDescriptor(GitSCM.class);
+    private boolean hasHudsonTasksMailer() {
+        // TODO convert to checking for mailer plugin as plugin migrates to 1.509+
+        try {
+            Class.forName("hudson.tasks.Mailer");
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
+    }
+
+    private boolean isCreateAccountBasedOnEmail() {
+        Hudson hudson = Hudson.getInstance();
+        if (hudson == null) {
+            return false;
+        }
+        DescriptorImpl descriptor = (DescriptorImpl) hudson.getDescriptor(GitSCM.class);
 
         return descriptor.isCreateAccountBasedOnEmail();
     }
@@ -311,10 +340,6 @@ public class GitChangeSet extends ChangeLogSet.Entry {
             csAuthorEmail = this.committerEmail;
         }
 
-        if (csAuthor == null) {
-            throw new RuntimeException("No author in changeset " + id);
-        }
-
         return findOrCreateUser(csAuthor, csAuthorEmail, isCreateAccountBasedOnEmail());
     }
 
@@ -328,8 +353,6 @@ public class GitChangeSet extends ChangeLogSet.Entry {
     public String getAuthorName() {
         // If true, use the author field from git log rather than the committer.
         String csAuthor = authorOrCommitter ? author : committer;
-        if (csAuthor == null)
-            throw new RuntimeException("No author in changeset " + id);
         return csAuthor;
     }
 
@@ -359,13 +382,13 @@ public class GitChangeSet extends ChangeLogSet.Entry {
     public String getCommentAnnotated() {
         MarkupText markup = new MarkupText(getComment());
         for (ChangeLogAnnotator a : ChangeLogAnnotator.all())
-            a.annotate(getParent().build,this,markup);
+            a.annotate(getParent().getRun(), this, markup);
 
         return markup.toString(false);
     }
 
     public String getBranch() {
-        return this.branch;
+        return null;
     }
 
     @ExportedBean(defaultVisibility=999)

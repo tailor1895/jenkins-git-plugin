@@ -1,5 +1,6 @@
 package hudson.plugins.git.browser;
 
+import hudson.model.Run;
 import hudson.plugins.git.GitChangeLogParser;
 import hudson.plugins.git.GitChangeSet;
 import hudson.plugins.git.GitChangeSet.Path;
@@ -25,21 +26,13 @@ public class RedmineWebTest extends TestCase {
      *
      */
     private static final String REDMINE_URL = "https://SERVER/PATH/projects/PROJECT/repository";
-    private final RedmineWeb redmineWeb;
-
-    {
-        try {
-            redmineWeb = new RedmineWeb(REDMINE_URL);
-        } catch (MalformedURLException e) {
-            throw new RuntimeException(e);
-        }
-    }
+    private final RedmineWeb redmineWeb = new RedmineWeb(REDMINE_URL);
 
     /**
      * Test method for {@link hudson.plugins.git.browser.RedmineWeb#getUrl()}.
      * @throws MalformedURLException
      */
-    public void testGetUrl() throws MalformedURLException {
+    public void testGetUrl() throws IOException {
         assertEquals(String.valueOf(redmineWeb.getUrl()), REDMINE_URL  + "/");
     }
 
@@ -47,7 +40,7 @@ public class RedmineWebTest extends TestCase {
      * Test method for {@link hudson.plugins.git.browser.RedmineWeb#getUrl()}.
      * @throws MalformedURLException
      */
-    public void testGetUrlForRepoWithTrailingSlash() throws MalformedURLException {
+    public void testGetUrlForRepoWithTrailingSlash() throws IOException {
         assertEquals(String.valueOf(new RedmineWeb(REDMINE_URL + "/").getUrl()), REDMINE_URL  + "/");
     }
 
@@ -104,7 +97,7 @@ public class RedmineWebTest extends TestCase {
     private GitChangeSet createChangeSet(String rawchangelogpath) throws IOException, SAXException {
         final File rawchangelog = new File(RedmineWebTest.class.getResource(rawchangelogpath).getFile());
         final GitChangeLogParser logParser = new GitChangeLogParser(false);
-        final List<GitChangeSet> changeSetList = logParser.parse(null, rawchangelog).getLogs();
+        final List<GitChangeSet> changeSetList = logParser.parse((Run) null, null, rawchangelog).getLogs();
         return changeSetList.get(0);
     }
 

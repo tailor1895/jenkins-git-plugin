@@ -20,17 +20,13 @@ import java.net.URL;
 public class GitLab extends GitRepositoryBrowser {
 
     private static final long serialVersionUID = 1L;
-    private final URL url;
+
     private final double version;
 
     @DataBoundConstructor
-    public GitLab(String url, String version) throws MalformedURLException {
+    public GitLab(String repoUrl, String version) {
+        super(repoUrl);
         this.version = Double.valueOf(version);
-        this.url = normalizeToEndWithSlash(new URL(url));
-    }
-
-    public URL getUrl() {
-        return url;
     }
 
     public double getVersion() {
@@ -40,9 +36,9 @@ public class GitLab extends GitRepositoryBrowser {
     /**
      * Creates a link to the changeset
      *
-     * https://[GitLab URL]/commits/a9182a07750c9a0dfd89a8461adf72ef5ef0885b
+     * v &lt; 3.0: [GitLab URL]/commits/[Hash]
+     * else:       [GitLab URL]/commit/[Hash]
      *
-     * @param path
      * @return diff link
      * @throws IOException
      */
@@ -50,14 +46,15 @@ public class GitLab extends GitRepositoryBrowser {
     public URL getChangeSetLink(GitChangeSet changeSet) throws IOException {
         String  commitPrefix;
 
-        return new URL(url, calculatePrefix() + changeSet.getId().toString());
+        return new URL(getUrl(), calculatePrefix() + changeSet.getId().toString());
     }
 
     /**
      * Creates a link to the commit diff.
-     * 
-     * https://[GitLab URL]/commits/a9182a07750c9a0dfd89a8461adf72ef5ef0885b#[path to file]
-     * 
+     *
+     * v &lt; 3.0: [GitLab URL]/commits/[Hash]#[File path]
+     * else:       [GitLab URL]/commit/[Hash]#[File path]
+     *
      * @param path
      * @return diff link
      * @throws IOException
@@ -65,13 +62,15 @@ public class GitLab extends GitRepositoryBrowser {
     @Override
     public URL getDiffLink(Path path) throws IOException {
         final GitChangeSet changeSet = path.getChangeSet();
-        return new URL(url, calculatePrefix() + changeSet.getId().toString() + "#" + path.getPath());
+        return new URL(getUrl(), calculatePrefix() + changeSet.getId().toString() + "#" + path.getPath());
     }
 
     /**
      * Creates a link to the file.
-     * https://[GitLab URL]/a9182a07750c9a0dfd89a8461adf72ef5ef0885b/tree/pom.xml
-     * 
+     * v &le; 4.2: [GitLab URL]tree/[Hash]/[File path]
+     * v &lt; 5.1: [GitLab URL][Hash]/tree/[File path]
+     * else:       [GitLab URL]blob/[Hash]/[File path]
+     *
      * @param path
      * @return file link
      * @throws IOException
@@ -81,8 +80,13 @@ public class GitLab extends GitRepositoryBrowser {
         if (path.getEditType().equals(EditType.DELETE)) {
             return getDiffLink(path);
         } else {
-            final String spec = "/" + path.getChangeSet().getId() + "/tree/" + path.getPath();
-            return new URL(url, url.getPath() + spec);
+            if(getVersion() <= 4.2) {
+                return new URL(getUrl(), "tree/" + path.getChangeSet().getId() + "/" + path.getPath());
+            } else if(getVersion() < 5.1) {
+                return new URL(getUrl(), path.getChangeSet().getId() + "/tree/" + path.getPath());
+            } else {
+                return new URL(getUrl(), "blob/" + path.getChangeSet().getId() + "/" + path.getPath());
+            }
         }
     }
 
@@ -94,16 +98,16 @@ public class GitLab extends GitRepositoryBrowser {
 
         @Override
         public GitLab newInstance(StaplerRequest req, JSONObject jsonObject) throws FormException {
-            return req.bindParameters(GitLab.class, "Gitlab.");
+            return req.bindJSON(GitLab.class, jsonObject);
         }
     }
 
     private String calculatePrefix() {
-        if(getVersion() >= 3){
+        if(getVersion() < 3) {
+            return "commits/";
+        } else {
             return "commit/";
         }
-
-        return "commits/";
     } 
 
 }

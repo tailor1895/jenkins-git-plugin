@@ -1,3 +1,4 @@
+<?jelly escape-by-default='true'?>
 <j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:d="jelly:define" xmlns:l="/lib/layout"
          xmlns:t="/lib/hudson" xmlns:f="/lib/form">
   <f:section title="Git plugin">
@@ -10,6 +11,14 @@
     <f:entry title="Create new accounts base on author/committer's email" field="createAccountBasedOnEmail">
            <f:checkbox name="createAccountBasedOnEmail" checked="${descriptor.createAccountBasedOnEmail}"/>
     </f:entry>
+    <!--
+    <f:entry title="Default git client implementation" field="defaultClientType">
+        <select>
+            <f:option value="JGIT" selected="${descriptor.defaultClientType == 'JGIT'}">JGit</f:option>
+            <f:option value="GITCLI" selected="${descriptor.defaultClientType == 'GITCLI'}">command line Git</f:option>
+        </select>
+    </f:entry>
+    -->
   </f:section>
 </j:jelly>
 

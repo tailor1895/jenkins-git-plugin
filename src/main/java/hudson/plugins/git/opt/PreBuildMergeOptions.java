@@ -1,6 +1,7 @@
 package hudson.plugins.git.opt;
 
 import org.eclipse.jgit.transport.RemoteConfig;
+import org.jenkinsci.plugins.gitclient.MergeCommand;
 import org.kohsuke.stapler.export.Exported;
 import org.kohsuke.stapler.export.ExportedBean;
 
@@ -25,7 +26,13 @@ public class PreBuildMergeOptions implements Serializable {
      */
     public String mergeTarget = null;
 
-    @Exported
+    /**
+     * Merge strategy.
+     */
+    public String mergeStrategy = MergeCommand.Strategy.DEFAULT.toString();
+
+    public MergeCommand.GitPluginFastForwardMode fastForwardMode = MergeCommand.GitPluginFastForwardMode.FF;
+
     public RemoteConfig getMergeRemote() {
         return mergeRemote;
     }
@@ -41,6 +48,30 @@ public class PreBuildMergeOptions implements Serializable {
 
     public void setMergeTarget(String mergeTarget) {
         this.mergeTarget = mergeTarget;
+    }
+
+    @Exported
+    public MergeCommand.Strategy getMergeStrategy() {
+        for (MergeCommand.Strategy strategy: MergeCommand.Strategy.values())
+            if (strategy.toString().equals(mergeStrategy))
+                return strategy;
+        return MergeCommand.Strategy.DEFAULT;
+    }
+
+    public void setMergeStrategy(MergeCommand.Strategy mergeStrategy) {
+        this.mergeStrategy = mergeStrategy.toString();
+    }
+
+    @Exported
+    public MergeCommand.GitPluginFastForwardMode getFastForwardMode() {
+        for (MergeCommand.GitPluginFastForwardMode ffMode : MergeCommand.GitPluginFastForwardMode.values())
+            if (ffMode == fastForwardMode)
+                return ffMode;
+        return MergeCommand.GitPluginFastForwardMode.FF;
+    }
+
+    public void setFastForwardMode(MergeCommand.GitPluginFastForwardMode fastForwardMode) {
+      this.fastForwardMode = fastForwardMode;
     }
 
     @Exported

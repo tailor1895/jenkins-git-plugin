@@ -1,11 +1,11 @@
 package hudson.plugins.git;
 
+import hudson.FilePath;
 import hudson.model.TaskListener;
 import hudson.plugins.git.util.GitUtils;
 import org.eclipse.jgit.lib.ObjectId;
 import org.jenkinsci.plugins.gitclient.GitClient;
 
-import java.io.File;
 import java.io.IOException;
 import java.util.*;
 import java.util.Map.Entry;
@@ -19,7 +19,6 @@ import java.util.Map.Entry;
  */
 public class SubmoduleCombinator {
     GitClient git;
-    File         workspace;
     TaskListener listener;
 
     long         tid = new Date().getTime();
@@ -27,16 +26,13 @@ public class SubmoduleCombinator {
   
     Collection<SubmoduleConfig> submoduleConfig;
   
-    public SubmoduleCombinator(GitClient git, TaskListener listener, File workspace,
-                               Collection<SubmoduleConfig> cfg) {
+    public SubmoduleCombinator(GitClient git, TaskListener listener, Collection<SubmoduleConfig> cfg) {
         this.git = git;
         this.listener = listener;
-    
-        this.workspace = workspace;
         this.submoduleConfig = cfg;
     }
 
-    public void createSubmoduleCombinations() throws GitException, IOException {
+    public void createSubmoduleCombinations() throws GitException, IOException, InterruptedException {
         Map<IndexEntry, Collection<Revision>> moduleBranches = new HashMap<IndexEntry, Collection<Revision>>();
 
         for (IndexEntry submodule : git.getSubmodules("HEAD")) {
@@ -138,7 +134,7 @@ public class SubmoduleCombinator {
         return null;
     }
 
-    protected void makeCombination(Map<IndexEntry, Revision> settings) {
+    protected void makeCombination(Map<IndexEntry, Revision> settings) throws InterruptedException {
         // Assume we are checked out
         String name = "combine-" + tid + "-" + (idx++); 
         git.branch(name);
@@ -180,7 +176,7 @@ public class SubmoduleCombinator {
 
             if (b == null) return -1;
 
-            if (!entry.getObject().equals(b.getSha1())) difference++;
+            if (!entry.getObject().equals(b.getSha1().getName())) difference++;
 
         }
         return difference;

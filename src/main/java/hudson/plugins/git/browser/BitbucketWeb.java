@@ -20,29 +20,21 @@ import java.net.URL;
 public class BitbucketWeb extends GitRepositoryBrowser {
 
     private static final long serialVersionUID = 1L;
-    private final URL url;
 
     @DataBoundConstructor
-    public BitbucketWeb(String url) throws MalformedURLException {
-        this.url = normalizeToEndWithSlash(new URL(url));
-    }
-
-    public URL getUrl() {
-        return url;
+    public BitbucketWeb(String repoUrl) {
+        super(repoUrl);
     }
 
     @Override
     public URL getChangeSetLink(GitChangeSet changeSet) throws IOException {
-        return new URL(url, url.getPath() + "changeset/" + changeSet.getId());
-    }
-
-    private QueryBuilder param() {
-        return new QueryBuilder(url.getQuery());
+        URL url = getUrl();
+        return new URL(url, url.getPath() + "commits/" + changeSet.getId());
     }
 
     /**
      * Creates a link to the file diff.
-     * http://[BitbucketWeb URL]/changeset/[commitid]
+     * http://[BitbucketWeb URL]/commits/[commitid]
      *
      * @param path affected file path
      * @return diff link
@@ -54,7 +46,6 @@ public class BitbucketWeb extends GitRepositoryBrowser {
                 || path.getChangeSet().getParentCommit() == null) {
             return null;
         }
-        final String pathAsString = path.getPath();
         return getDiffLinkRegardlessOfEditType(path);
     }
 
@@ -75,6 +66,7 @@ public class BitbucketWeb extends GitRepositoryBrowser {
     @Override
     public URL getFileLink(GitChangeSet.Path path) throws IOException {
         final String pathAsString = path.getPath();
+        URL url = getUrl();
         return new URL(url, url.getPath() + "history/" + pathAsString);
     }
 
@@ -86,7 +78,7 @@ public class BitbucketWeb extends GitRepositoryBrowser {
 
         @Override
         public BitbucketWeb newInstance(StaplerRequest req, JSONObject jsonObject) throws FormException {
-            return req.bindParameters(BitbucketWeb.class, "bitbucketweb.");
+            return req.bindJSON(BitbucketWeb.class, jsonObject);
         }
     }
 

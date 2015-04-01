@@ -6,23 +6,27 @@ import hudson.FilePath;
 import hudson.Launcher;
 import hudson.model.*;
 import hudson.plugins.git.Branch;
+import hudson.plugins.git.BranchSpec;
 import hudson.plugins.git.GitException;
 import hudson.plugins.git.Revision;
+import hudson.remoting.VirtualChannel;
 import hudson.slaves.NodeProperty;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
-import org.eclipse.jgit.revwalk.filter.RevFilter;
 import org.jenkinsci.plugins.gitclient.GitClient;
+import org.jenkinsci.plugins.gitclient.RepositoryCallback;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.Serializable;
 import java.text.MessageFormat;
 import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-public class GitUtils {
+public class GitUtils implements Serializable {
     GitClient git;
     TaskListener listener;
 
@@ -34,11 +38,11 @@ public class GitUtils {
     /**
      * Return a list of "Revisions" - where a revision knows about all the branch names that refer to
      * a SHA1.
-     * @return
+     * @return list of revisions
      * @throws IOException
      * @throws GitException
      */
-    public Collection<Revision> getAllBranchRevisions() throws GitException, IOException {
+    public Collection<Revision> getAllBranchRevisions() throws GitException, IOException, InterruptedException {
         Map<ObjectId, Revision> revisions = new HashMap<ObjectId, Revision>();
         for (Branch b : git.getRemoteBranches()) {
             Revision r = revisions.get(b.getSHA1());
@@ -54,11 +58,11 @@ public class GitUtils {
     /**
      * Return the revision containing the branch name.
      * @param branchName
-     * @return
+     * @return revision containing branchName
      * @throws IOException
      * @throws GitException
      */
-    public Revision getRevisionContainingBranch(String branchName) throws GitException, IOException {
+    public Revision getRevisionContainingBranch(String branchName) throws GitException, IOException, InterruptedException {
         for(Revision revision : getAllBranchRevisions()) {
             for(Branch b : revision.getBranches()) {
                 if(b.getName().equals(branchName)) {
@@ -69,12 +73,35 @@ public class GitUtils {
         return null;
     }
 
-    public Revision getRevisionForSHA1(ObjectId sha1) throws GitException, IOException {
+    public Revision getRevisionForSHA1(ObjectId sha1) throws GitException, IOException, InterruptedException {
         for(Revision revision : getAllBranchRevisions()) {
             if(revision.getSha1().equals(sha1))
                 return revision;
         }
-        return null;
+        return new Revision(sha1);
+    }
+
+    public Revision sortBranchesForRevision(Revision revision, List<BranchSpec> branchOrder) {
+        EnvVars env = new EnvVars();
+        return sortBranchesForRevision(revision, branchOrder, env);
+    }
+
+    public Revision sortBranchesForRevision(Revision revision, List<BranchSpec> branchOrder, EnvVars env) {
+        ArrayList<Branch> orderedBranches = new ArrayList<Branch>(revision.getBranches().size());
+        ArrayList<Branch> revisionBranches = new ArrayList<Branch>(revision.getBranches());
+
+        for(BranchSpec branchSpec : branchOrder) {
+            for (Iterator<Branch> i = revisionBranches.iterator(); i.hasNext();) {
+                Branch b = i.next();
+                if (branchSpec.matches(b.getName(), env)) {
+                    i.remove();
+                    orderedBranches.add(b);
+                }
+            }
+        }
+
+        orderedBranches.addAll(revisionBranches);
+        return new Revision(revision.getSha1(), orderedBranches);
     }
 
     /**
@@ -84,79 +111,78 @@ public class GitUtils {
      * @return filtered tip branches
      */
     @WithBridgeMethods(Collection.class)
-    public List<Revision> filterTipBranches(Collection<Revision> revisions) {
+    public List<Revision> filterTipBranches(final Collection<Revision> revisions) throws InterruptedException {
         // If we have 3 branches that we might want to build
         // ----A--.---.--- B
         //        \-----C
 
         // we only want (B) and (C), as (A) is an ancestor (old).
         final List<Revision> l = new ArrayList<Revision>(revisions);
-        
+
         // Bypass any rev walks if only one branch or less
         if (l.size() <= 1)
             return l;
 
-        final boolean log = LOGGER.isLoggable(Level.FINE);
-        Revision revI;
-        Revision revJ;
-        ObjectId shaI;
-        ObjectId shaJ;
-        ObjectId commonAncestor;
-        RevWalk walk = null;
-        Repository repository = null;
-        final long start = System.currentTimeMillis();
-        long calls = 0;
-        if (log)
-            LOGGER.fine(MessageFormat.format(
-                    "Computing merge base of {0}  branches", l.size()));
         try {
-            repository = git.getRepository();
-            walk = new RevWalk(repository);
-            walk.setRetainBody(false);
-            walk.setRevFilter(RevFilter.MERGE_BASE);
-            for (int i = 0; i < l.size(); i++)
-                for (int j = i + 1; j < l.size(); j++) {
-                    revI = l.get(i);
-                    revJ = l.get(j);
-                    shaI = revI.getSha1();
-                    shaJ = revJ.getSha1();
+            return git.withRepository(new RepositoryCallback<List<Revision>>() {
+                public List<Revision> invoke(Repository repo, VirtualChannel channel) throws IOException, InterruptedException {
 
-                    walk.reset();
-                    walk.markStart(walk.parseCommit(shaI));
-                    walk.markStart(walk.parseCommit(shaJ));
-                    commonAncestor = walk.next();
-                    calls++;
+                    // Commit nodes that we have already reached
+                    Set<RevCommit> visited = new HashSet<RevCommit>();
+                    // Commits nodes that are tips if we don't reach them walking back from
+                    // another node
+                    Map<RevCommit, Revision> tipCandidates = new HashMap<RevCommit, Revision>();
 
-                    if (commonAncestor == null)
-                        continue;
-                    if (commonAncestor.equals(shaI)) {
-                        if (log)
-                            LOGGER.fine("filterTipBranches: " + revJ
-                                    + " subsumes " + revI);
-                        l.remove(i);
-                        i--;
-                        break;
+                    long calls = 0;
+                    final long start = System.currentTimeMillis();
+
+                    RevWalk walk = new RevWalk(repo);
+
+                    final boolean log = LOGGER.isLoggable(Level.FINE);
+
+                    if (log)
+                        LOGGER.fine(MessageFormat.format(
+                                "Computing merge base of {0}  branches", l.size()));
+
+                    try {
+                        walk.setRetainBody(false);
+
+                        // Each commit passed in starts as a potential tip.
+                        // We walk backwards in the commit's history, until we reach the
+                        // beginning or a commit that we have already visited. In that case,
+                        // we mark that one as not a potential tip.
+                        for (Revision r : revisions) {
+                            walk.reset();
+                            RevCommit head = walk.parseCommit(r.getSha1());
+
+                            tipCandidates.put(head, r);
+
+                            walk.markStart(head);
+                            for (RevCommit commit : walk) {
+                                calls++;
+                                if (visited.contains(commit)) {
+                                    tipCandidates.remove(commit);
+                                    break;
+                                }
+                                visited.add(commit);
+                            }
+                        }
+
+                    } finally {
+                        walk.release();
                     }
-                    if (commonAncestor.equals(shaJ)) {
-                        if (log)
-                            LOGGER.fine("filterTipBranches: " + revI
-                                    + " subsumes " + revJ);
-                        l.remove(j);
-                        j--;
-                    }
+
+                    if (log)
+                        LOGGER.fine(MessageFormat.format(
+                                "Computed merge bases in {0} commit steps and {1} ms", calls,
+                                (System.currentTimeMillis() - start)));
+
+                    return new ArrayList<Revision>(tipCandidates.values());
                 }
+            });
         } catch (IOException e) {
             throw new GitException("Error computing merge base", e);
-        } finally {
-            if (walk != null) walk.release();
-            if (repository != null) repository.close();
         }
-        if (log)
-            LOGGER.fine(MessageFormat.format(
-                    "Computed {0} merge bases in {1} ms", calls,
-                    (System.currentTimeMillis() - start)));
-
-        return l;
     }
 
     public static EnvVars getPollEnvironment(AbstractProject p, FilePath ws, Launcher launcher, TaskListener listener)
@@ -173,9 +199,17 @@ public class GitUtils {
         throws IOException,InterruptedException {
         EnvVars env;
         StreamBuildListener buildListener = new StreamBuildListener((OutputStream)listener.getLogger());
-        AbstractBuild b = (AbstractBuild)p.getLastBuild();
+        AbstractBuild b = p.getLastBuild();
 
-        if (reuseLastBuildEnv && b != null) {
+        if (b == null) {
+            // If there is no last build, we need to trigger a new build anyway, and
+            // GitSCM.compareRemoteRevisionWithImpl() will short-circuit and never call this code
+            // ("No previous build, so forcing an initial build.").
+            throw new IllegalArgumentException("Last build must not be null. If there really is no last build, " +
+                    "a new build should be triggered without polling the SCM.");
+        }
+
+        if (reuseLastBuildEnv) {
             Node lastBuiltOn = b.getBuiltOn();
 
             if (lastBuiltOn != null) {
@@ -189,13 +223,8 @@ public class GitUtils {
             } else {
                 env = new EnvVars(System.getenv());
             }
-            
+
             p.getScm().buildEnvVars(b,env);
-
-            if (lastBuiltOn != null) {
-
-            }
-
         } else {
             env = new EnvVars(System.getenv());
         }
@@ -204,7 +233,7 @@ public class GitUtils {
         if(rootUrl!=null) {
             env.put("HUDSON_URL", rootUrl); // Legacy.
             env.put("JENKINS_URL", rootUrl);
-            if( b != null) env.put("BUILD_URL", rootUrl+b.getUrl());
+            env.put("BUILD_URL", rootUrl+b.getUrl());
             env.put("JOB_URL", rootUrl+p.getUrl());
         }
 
@@ -224,9 +253,25 @@ public class GitUtils {
             }
         }
 
+        // add env contributing actions' values from last build to environment - fixes JENKINS-22009
+        addEnvironmentContributingActionsValues(env, b);
+
         EnvVars.resolve(env);
 
         return env;
+    }
+
+    private static void addEnvironmentContributingActionsValues(EnvVars env, AbstractBuild b) {
+        List<? extends Action> buildActions = b.getAllActions();
+        if (buildActions != null) {
+            for (Action action : buildActions) {
+                // most importantly, ParametersAction will be processed here (for parameterized builds)
+                if (action instanceof ParametersAction) {
+                    ParametersAction envAction = (ParametersAction) action;
+                    envAction.buildEnvVars(b, env);
+                }
+            }
+        }
     }
 
     public static String[] fixupNames(String[] names, String[] urls) {
@@ -255,4 +300,6 @@ public class GitUtils {
     }
 
     private static final Logger LOGGER = Logger.getLogger(GitUtils.class.getName());
+
+    private static final long serialVersionUID = 1L;
 }

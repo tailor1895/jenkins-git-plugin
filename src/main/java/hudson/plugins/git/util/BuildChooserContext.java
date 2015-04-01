@@ -1,7 +1,8 @@
 package hudson.plugins.git.util;
 
-import hudson.model.AbstractBuild;
-import hudson.model.AbstractProject;
+import hudson.EnvVars;
+import hudson.model.Job;
+import hudson.model.Run;
 import hudson.remoting.Channel;
 import hudson.remoting.VirtualChannel;
 
@@ -18,9 +19,12 @@ import java.io.Serializable;
  * @author Kohsuke Kawaguchi
  */
 public interface BuildChooserContext {
-    public <T> T actOnBuild(ContextCallable<AbstractBuild<?,?>,T> callable) throws IOException,InterruptedException;
-    public <T> T actOnProject(ContextCallable<AbstractProject<?,?>,T> callable) throws IOException,InterruptedException;
+    <T> T actOnBuild(ContextCallable<Run<?,?>,T> callable) throws IOException,InterruptedException;
+    <T> T actOnProject(ContextCallable<Job<?,?>,T> callable) throws IOException,InterruptedException;
 
+    Run<?,?> getBuild();
+
+    EnvVars getEnvironment();
 
     public static interface ContextCallable<P,T> extends Serializable {
         /**

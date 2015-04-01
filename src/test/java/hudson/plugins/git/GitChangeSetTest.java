@@ -1,22 +1,34 @@
 package hudson.plugins.git;
 
+import hudson.Functions;
 import hudson.model.User;
 import hudson.plugins.git.GitChangeSet.Path;
 import hudson.scm.EditType;
 import hudson.tasks.Mailer;
 import hudson.tasks.Mailer.UserProperty;
+import java.io.IOException;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 
 import org.jvnet.hudson.test.HudsonTestCase;
 
-import junit.framework.Assert;
-import junit.framework.TestCase;
-
 public class GitChangeSetTest extends HudsonTestCase {
-    
+
+    @Override
+    protected void tearDown() throws Exception {
+        try { //Avoid test failures due to failed cleanup tasks
+            super.tearDown();
+        } catch (Exception e) {
+            if (e instanceof IOException && Functions.isWindows()) {
+                return;
+            }
+            e.printStackTrace();
+        }
+    }
+
     public GitChangeSetTest(String testName) {
         super(testName);
     }
@@ -47,21 +59,22 @@ public class GitChangeSetTest extends HudsonTestCase {
 
         return new GitChangeSet(lines, authorOrCommitter);
     }
-    
+
     public void testLegacyChangeSet() {
         GitChangeSet changeSet = genChangeSet(false, true);
         assertChangeSet(changeSet);
     }
-    
+
     public void testChangeSet() {
-    	GitChangeSet changeSet = genChangeSet(false, false);
-    	assertChangeSet(changeSet);
+        GitChangeSet changeSet = genChangeSet(false, false);
+        assertChangeSet(changeSet);
     }
 
-	private void assertChangeSet(GitChangeSet changeSet) {
-		Assert.assertEquals("123abc456def", changeSet.getId());
-        Assert.assertEquals("Commit title.", changeSet.getMsg());
-        Assert.assertEquals("Commit title.\nCommit extended description.\n", changeSet.getComment());
+    private void assertChangeSet(GitChangeSet changeSet) {
+        assertEquals("123abc456def", changeSet.getId());
+        assertEquals("Commit title.", changeSet.getMsg());
+        assertEquals("Commit title.\nCommit extended description.\n", changeSet.getComment());
+        assertEquals("Commit title.\nCommit extended description.\n".replace("\n", "<br>"), changeSet.getCommentAnnotated());
         HashSet<String> expectedAffectedPaths = new HashSet<String>(7);
         expectedAffectedPaths.add("src/test/add.file");
         expectedAffectedPaths.add("src/test/deleted.file");
@@ -69,65 +82,128 @@ public class GitChangeSetTest extends HudsonTestCase {
         expectedAffectedPaths.add("src/test/renamedFrom.file");
         expectedAffectedPaths.add("src/test/renamedTo.file");
         expectedAffectedPaths.add("src/test/copyOf.file");
-        Assert.assertEquals(expectedAffectedPaths, changeSet.getAffectedPaths());
+        assertEquals(expectedAffectedPaths, changeSet.getAffectedPaths());
 
         Collection<Path> actualPaths = changeSet.getPaths();
-        Assert.assertEquals(6, actualPaths.size());
+        assertEquals(6, actualPaths.size());
         for (Path path : actualPaths) {
             if ("src/test/add.file".equals(path.getPath())) {
-                Assert.assertEquals(EditType.ADD, path.getEditType());
-                Assert.assertNull(path.getSrc());
-                Assert.assertEquals("123abc456def789abc012def345abc678def901a", path.getDst());
+                assertEquals(EditType.ADD, path.getEditType());
+                assertNull(path.getSrc());
+                assertEquals("123abc456def789abc012def345abc678def901a", path.getDst());
             } else if ("src/test/deleted.file".equals(path.getPath())) {
-                Assert.assertEquals(EditType.DELETE, path.getEditType());
-                Assert.assertEquals("123abc456def789abc012def345abc678def901a", path.getSrc());
-                Assert.assertNull(path.getDst());
+                assertEquals(EditType.DELETE, path.getEditType());
+                assertEquals("123abc456def789abc012def345abc678def901a", path.getSrc());
+                assertNull(path.getDst());
             } else if ("src/test/modified.file".equals(path.getPath())) {
-                Assert.assertEquals(EditType.EDIT, path.getEditType());
-                Assert.assertEquals("123abc456def789abc012def345abc678def901a", path.getSrc());
-                Assert.assertEquals("bc234def567abc890def123abc456def789abc01", path.getDst());
+                assertEquals(EditType.EDIT, path.getEditType());
+                assertEquals("123abc456def789abc012def345abc678def901a", path.getSrc());
+                assertEquals("bc234def567abc890def123abc456def789abc01", path.getDst());
             } else if ("src/test/renamedFrom.file".equals(path.getPath())) {
-                Assert.assertEquals(EditType.DELETE, path.getEditType());
-                Assert.assertEquals("123abc456def789abc012def345abc678def901a", path.getSrc());
-                Assert.assertEquals("bc234def567abc890def123abc456def789abc01", path.getDst());
+                assertEquals(EditType.DELETE, path.getEditType());
+                assertEquals("123abc456def789abc012def345abc678def901a", path.getSrc());
+                assertEquals("bc234def567abc890def123abc456def789abc01", path.getDst());
             } else if ("src/test/renamedTo.file".equals(path.getPath())) {
-                Assert.assertEquals(EditType.ADD, path.getEditType());
-                Assert.assertEquals("123abc456def789abc012def345abc678def901a", path.getSrc());
-                Assert.assertEquals("bc234def567abc890def123abc456def789abc01", path.getDst());
+                assertEquals(EditType.ADD, path.getEditType());
+                assertEquals("123abc456def789abc012def345abc678def901a", path.getSrc());
+                assertEquals("bc234def567abc890def123abc456def789abc01", path.getDst());
             } else if ("src/test/copyOf.file".equals(path.getPath())) {
-                Assert.assertEquals(EditType.ADD, path.getEditType());
-                Assert.assertEquals("bc234def567abc890def123abc456def789abc01", path.getSrc());
-                Assert.assertEquals("123abc456def789abc012def345abc678def901a", path.getDst());
+                assertEquals(EditType.ADD, path.getEditType());
+                assertEquals("bc234def567abc890def123abc456def789abc01", path.getSrc());
+                assertEquals("123abc456def789abc012def345abc678def901a", path.getDst());
             } else {
-                Assert.fail("Unrecognized path.");
+                fail("Unrecognized path.");
             }
         }
-	}
+    }
 
     public void testAuthorOrCommitter() {
         GitChangeSet committerCS = genChangeSet(false, false);
 
-        Assert.assertEquals("John Committer", committerCS.getAuthorName());
+        assertEquals("John Committer", committerCS.getAuthorName());
 
         GitChangeSet authorCS = genChangeSet(true, false);
 
-        Assert.assertEquals("John Author", authorCS.getAuthorName());
+        assertEquals("John Author", authorCS.getAuthorName());
     }
-    
+
     public void testFindOrCreateUser() {
-    	GitChangeSet committerCS = genChangeSet(false, false);
-    	String csAuthor = "John Author";
-		String csAuthorEmail = "jauthor@nospam.com";
-		boolean createAccountBasedOnEmail = true;
-		
-		User user = committerCS.findOrCreateUser(csAuthor, csAuthorEmail, createAccountBasedOnEmail);
-		Assert.assertNotNull(user);
-		
-		UserProperty property = user.getProperty(Mailer.UserProperty.class);
-		Assert.assertNotNull(property);
-		
-		String address = property.getAddress();
-		Assert.assertNotNull(address);
-		Assert.assertEquals(csAuthorEmail, address);
+        GitChangeSet committerCS = genChangeSet(false, false);
+        String csAuthor = "John Author";
+        String csAuthorEmail = "jauthor@nospam.com";
+        boolean createAccountBasedOnEmail = true;
+
+        User user = committerCS.findOrCreateUser(csAuthor, csAuthorEmail, createAccountBasedOnEmail);
+        assertNotNull(user);
+
+        UserProperty property = user.getProperty(Mailer.UserProperty.class);
+        assertNotNull(property);
+
+        String address = property.getAddress();
+        assertNotNull(address);
+        assertEquals(csAuthorEmail, address);
+
+        assertEquals(User.getUnknown(), committerCS.findOrCreateUser(null, csAuthorEmail, false));
+        assertEquals(User.getUnknown(), committerCS.findOrCreateUser(null, csAuthorEmail, true));
     }
+
+    public void testIsoDate() {
+
+        GitChangeSet c = new GitChangeSet(Arrays.asList("author John Doe <john.doe@jenkins-ci.org> 2015-03-03T09:22:42-0700"), true);
+        assertEquals("2015-03-03T09:22:42-0700",c.getDate());
+        assertEquals(1425399762000L, c.getTimestamp());
+
+        c = new GitChangeSet(Arrays.asList("author John Doe <john.doe@jenkins-ci.org> 2015-03-03T09:22:42-07:00"), true);
+        assertEquals("2015-03-03T09:22:42-07:00",c.getDate());
+        assertEquals(1425399762000L,c.getTimestamp());
+
+        c = new GitChangeSet(Arrays.asList("author John Doe <john.doe@jenkins-ci.org> 2015-03-03T16:22:42Z"), true);
+        assertEquals("2015-03-03T16:22:42Z",c.getDate());
+        assertEquals(1425399762000L,c.getTimestamp());
+
+        c = new GitChangeSet(Arrays.asList("author John Doe <john.doe@jenkins-ci.org> 1425399762"), true);
+        assertEquals("2015-03-03T16:22:42Z",c.getDate());
+        assertEquals(1425399762000L,c.getTimestamp());
+
+        c = new GitChangeSet(Arrays.asList("author John Doe <john.doe@jenkins-ci.org> 1425374562 -0700"), true);
+        assertEquals("2015-03-03T09:22:42-0700",c.getDate());
+        assertEquals(1425399762000L,c.getTimestamp());
+    }
+
+
+    private GitChangeSet genChangeSetForSwedCase(boolean authorOrCommitter) {
+        ArrayList<String> lines = new ArrayList<String>();
+        lines.add("commit 1567861636cd854f4dd6fa40bf94c0c657681dd5");
+        lines.add("tree 66236cf9a1ac0c589172b450ed01f019a5697c49");
+        lines.add("parent e74a24e995305bd67a180f0ebc57927e2b8783ce");
+        lines.add("author mistera <mister.ahlander@ericsson.com> 1363879004 +0100");
+        lines.add("committer Mister Åhlander <mister.ahlander@ericsson.com> 1364199539 -0400");
+        lines.add("");
+        lines.add("    [task] Updated version.");
+        lines.add("    ");
+        lines.add("    Including earlier updates.");
+        lines.add("    ");
+        lines.add("    Changes in this version:");
+        lines.add("    - Changed to take the gerrit url from gerrit query command.");
+        lines.add("    - Aligned reason information with our new commit hooks");
+        lines.add("    ");
+        lines.add("    Change-Id: Ife96d2abed5b066d9620034bec5f04cf74b8c66d");
+        lines.add("    Reviewed-on: https://gerrit.e.se/12345");
+        lines.add("    Tested-by: Jenkins <jenkins@no-mail.com>");
+        lines.add("    Reviewed-by: Mister Another <mister.another@ericsson.com>");
+        lines.add("");
+        //above lines all on purpose vs specific troublesome case @ericsson.
+        return new GitChangeSet(lines, authorOrCommitter);
+    }
+
+    public void testAuthorOrCommitterSwedCase() {
+        GitChangeSet committerCS = genChangeSetForSwedCase(false);
+
+        assertEquals("Mister Åhlander", committerCS.getAuthorName());//swedish char on purpose
+
+        GitChangeSet authorCS = genChangeSetForSwedCase(true);
+
+        assertEquals("mistera", authorCS.getAuthorName());
+    }
+
 }

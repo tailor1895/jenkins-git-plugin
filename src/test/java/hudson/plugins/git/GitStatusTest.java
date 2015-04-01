@@ -4,20 +4,22 @@
  */
 package hudson.plugins.git;
 
+import hudson.Functions;
 import hudson.model.FreeStyleProject;
+import hudson.plugins.git.extensions.GitSCMExtension;
+import hudson.plugins.git.extensions.impl.IgnoreNotifyCommit;
 import hudson.plugins.git.util.DefaultBuildChooser;
 import hudson.triggers.SCMTrigger;
-
-import org.eclipse.jgit.transport.URIish;
-import org.kohsuke.stapler.HttpResponse;
-
+import java.io.IOException;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-
+import org.eclipse.jgit.transport.URIish;
 import org.jvnet.hudson.test.HudsonTestCase;
 import org.mockito.Mockito;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
 
 public class GitStatusTest extends HudsonTestCase {
     private GitStatus gitStatus;
@@ -30,6 +32,18 @@ public class GitStatusTest extends HudsonTestCase {
     protected void setUp() throws Exception {
         super.setUp();
         this.gitStatus = new GitStatus();
+    }
+
+    @Override
+    protected void tearDown() throws Exception {
+        try { //Avoid test failures due to failed cleanup tasks
+            super.tearDown();
+        } catch (Exception e) {
+            if (e instanceof IOException && Functions.isWindows()) {
+                return;
+            }
+            e.printStackTrace();
+        }
     }
 
     public void testGetDisplayName() {
@@ -54,7 +68,7 @@ public class GitStatusTest extends HudsonTestCase {
         SCMTrigger bMasterTrigger = setupProject("b", "master", false);
         SCMTrigger bTopicTrigger = setupProject("b", "topic", false);
 
-        this.gitStatus.doNotifyCommit("a", "");
+        this.gitStatus.doNotifyCommit("a", "", null);
         Mockito.verify(aMasterTrigger).run();
         Mockito.verify(aTopicTrigger).run();
         Mockito.verify(bMasterTrigger, Mockito.never()).run();
@@ -67,7 +81,7 @@ public class GitStatusTest extends HudsonTestCase {
         SCMTrigger bMasterTrigger = setupProject("b", "master", false);
         SCMTrigger bTopicTrigger = setupProject("b", "topic", false);
 
-        this.gitStatus.doNotifyCommit("nonexistent", "");
+        this.gitStatus.doNotifyCommit("nonexistent", "", null);
         Mockito.verify(aMasterTrigger, Mockito.never()).run();
         Mockito.verify(aTopicTrigger, Mockito.never()).run();
         Mockito.verify(bMasterTrigger, Mockito.never()).run();
@@ -80,7 +94,7 @@ public class GitStatusTest extends HudsonTestCase {
         SCMTrigger bMasterTrigger = setupProject("b", "master", false);
         SCMTrigger bTopicTrigger = setupProject("b", "topic", false);
 
-        this.gitStatus.doNotifyCommit("a", "master");
+        this.gitStatus.doNotifyCommit("a", "master", null);
         Mockito.verify(aMasterTrigger).run();
         Mockito.verify(aTopicTrigger, Mockito.never()).run();
         Mockito.verify(bMasterTrigger, Mockito.never()).run();
@@ -93,7 +107,7 @@ public class GitStatusTest extends HudsonTestCase {
         SCMTrigger bMasterTrigger = setupProject("b", "master", false);
         SCMTrigger bTopicTrigger = setupProject("b", "topic", false);
 
-        this.gitStatus.doNotifyCommit("a", "master,topic");
+        this.gitStatus.doNotifyCommit("a", "master,topic", null);
         Mockito.verify(aMasterTrigger).run();
         Mockito.verify(aTopicTrigger).run();
         Mockito.verify(bMasterTrigger, Mockito.never()).run();
@@ -106,7 +120,7 @@ public class GitStatusTest extends HudsonTestCase {
         SCMTrigger bMasterTrigger = setupProject("b", "master", false);
         SCMTrigger bTopicTrigger = setupProject("b", "topic", false);
 
-        this.gitStatus.doNotifyCommit("a", "nonexistent");
+        this.gitStatus.doNotifyCommit("a", "nonexistent", null);
         Mockito.verify(aMasterTrigger, Mockito.never()).run();
         Mockito.verify(aTopicTrigger, Mockito.never()).run();
         Mockito.verify(bMasterTrigger, Mockito.never()).run();
@@ -116,25 +130,36 @@ public class GitStatusTest extends HudsonTestCase {
     public void testDoNotifyCommitWithIgnoredRepository() throws Exception {
         SCMTrigger aMasterTrigger = setupProject("a", "master", true);
 
-        this.gitStatus.doNotifyCommit("a", "");
+        this.gitStatus.doNotifyCommit("a", null, "");
         Mockito.verify(aMasterTrigger, Mockito.never()).run();
     }
 
+
+    public void testDoNotifyCommitWithNoScmTrigger() throws Exception {
+        setupProject("a", "master", null);
+        this.gitStatus.doNotifyCommit("a", null, "");
+        // no expectation here, however we shouldn't have a build triggered, and no exception
+    }
+
     private SCMTrigger setupProject(String url, String branchString, boolean ignoreNotifyCommit) throws Exception {
-        FreeStyleProject project = createFreeStyleProject();
-        project.setScm(new GitSCM(
-                null,
-                Collections.singletonList(new UserRemoteConfig(url, null, null)),
-                Collections.singletonList(new BranchSpec(branchString)),
-                null,
-                false, Collections.<SubmoduleConfig>emptyList(), false,
-                false, new DefaultBuildChooser(), null, null, false, null,
-                null,
-                null, null, null, false, false, false, false, null, null, false, null, ignoreNotifyCommit, false));
         SCMTrigger trigger = Mockito.mock(SCMTrigger.class);
-        project.addTrigger(trigger);
+        Mockito.doReturn(ignoreNotifyCommit).when(trigger).isIgnorePostCommitHooks();
+        setupProject(url, branchString, trigger);
         return trigger;
     }
+
+    private void setupProject(String url, String branchString, SCMTrigger trigger) throws Exception {
+        FreeStyleProject project = createFreeStyleProject();
+        GitSCM git = new GitSCM(
+                Collections.singletonList(new UserRemoteConfig(url, null, null, null)),
+                Collections.singletonList(new BranchSpec(branchString)),
+                false, Collections.<SubmoduleConfig>emptyList(),
+                null, null,
+                Collections.<GitSCMExtension>emptyList());
+        project.setScm(git);
+        if (trigger != null) project.addTrigger(trigger);
+    }
+
 
     public void testLooseMatch() throws URISyntaxException {
         String[] list = new String[]{

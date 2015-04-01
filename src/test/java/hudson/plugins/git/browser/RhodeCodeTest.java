@@ -1,9 +1,9 @@
 package hudson.plugins.git.browser;
 
+import hudson.model.Run;
 import hudson.plugins.git.GitChangeLogParser;
 import hudson.plugins.git.GitChangeSet;
 import hudson.plugins.git.GitChangeSet.Path;
-
 import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
@@ -11,9 +11,7 @@ import java.net.URL;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
-
 import junit.framework.TestCase;
-
 import org.xml.sax.SAXException;
 
 
@@ -23,21 +21,13 @@ public class RhodeCodeTest extends TestCase {
      *
      */
     private static final String RHODECODE_URL = "https://SERVER/r/PROJECT";
-    private final RhodeCode rhodecode;
-
-    {
-        try {
-            rhodecode = new RhodeCode(RHODECODE_URL);
-        } catch (MalformedURLException e) {
-            throw new RuntimeException(e);
-        }
-    }
+    private final RhodeCode rhodecode = new RhodeCode(RHODECODE_URL);
 
     /**
      * Test method for {@link hudson.plugins.git.browser.RhodeCode#getUrl()}.
      * @throws MalformedURLException
      */
-    public void testGetUrl() throws MalformedURLException {
+    public void testGetUrl() throws IOException {
         assertEquals(String.valueOf(rhodecode.getUrl()), RHODECODE_URL  + "/");
     }
 
@@ -45,7 +35,7 @@ public class RhodeCodeTest extends TestCase {
      * Test method for {@link hudson.plugins.git.browser.RhodeCode#getUrl()}.
      * @throws MalformedURLException
      */
-    public void testGetUrlForRepoWithTrailingSlash() throws MalformedURLException {
+    public void testGetUrlForRepoWithTrailingSlash() throws IOException {
         assertEquals(String.valueOf(new RhodeCode(RHODECODE_URL + "/").getUrl()), RHODECODE_URL  + "/");
     }
 
@@ -56,7 +46,7 @@ public class RhodeCodeTest extends TestCase {
      */
     public void testGetChangeSetLinkGitChangeSet() throws IOException, SAXException {
         final URL changeSetLink = rhodecode.getChangeSetLink(createChangeSet("rawchangelog"));
-        assertEquals(RHODECODE_URL + "/files/396fc230a3db05c427737aa5c2eb7856ba72b05d/", changeSetLink.toString());
+        assertEquals(RHODECODE_URL + "/changeset/396fc230a3db05c427737aa5c2eb7856ba72b05d", changeSetLink.toString());
     }
 
     /**
@@ -100,7 +90,7 @@ public class RhodeCodeTest extends TestCase {
     private GitChangeSet createChangeSet(String rawchangelogpath) throws IOException, SAXException {
         final File rawchangelog = new File(RhodeCodeTest.class.getResource(rawchangelogpath).getFile());
         final GitChangeLogParser logParser = new GitChangeLogParser(false);
-        final List<GitChangeSet> changeSetList = logParser.parse(null, rawchangelog).getLogs();
+        final List<GitChangeSet> changeSetList = logParser.parse((Run) null, null, rawchangelog).getLogs();
         return changeSetList.get(0);
     }
 
